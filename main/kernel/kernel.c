@@ -14,6 +14,8 @@
 #include "module.h"
 #include "file_persist.h"
 #include "hal.h"
+#include "esp_netif.h"
+#include "esp_event.h"
 
 // Pending commands queue (cross-task)
 static char pending_cmds[MAX_PENDING_CMDS][INPUT_SIZE];
@@ -41,6 +43,25 @@ void kernel_enqueue_command(const char* cmd) {
     }
 }
 
+static char s_cron_cmd[256];
+static uint64_t s_cron_target_us = 0;
+static bool s_cron_active = false;
+
+void cron_schedule(const char *cmd, uint32_t delay_ms) {
+    strncpy(s_cron_cmd, cmd, sizeof(s_cron_cmd)-1);
+    s_cron_cmd[sizeof(s_cron_cmd)-1] = '\0';
+    s_cron_target_us = hal_time_us() + delay_ms * 1000;
+    s_cron_active = true;
+}
+
+void cron_poll(void) {
+    if (!s_cron_active) return;
+    if (hal_time_us() >= s_cron_target_us) {
+        s_cron_active = false;
+        commands_execute(s_cron_cmd);
+    }
+}
+
 void kernel_poll(void) {
     cron_poll();
     pending_commands_poll();
@@ -59,6 +80,11 @@ void kernel_init(void) {
     sched_init();
     LOG_I("kernel", "scheduler ready");
 
+    /* One-time ESP32 net layer init (required before WiFi/Swarm/ESP-NOW) */
+    esp_netif_init();
+    esp_event_loop_create_default();
+    LOG_I("kernel", "net layer ready");
+
     modules_init();
     LOG_I("kernel", "modules registered");
 
@@ -68,10 +94,16 @@ void kernel_init(void) {
 }
 
 void kernel_run(void) {
+    static uint64_t last_tick = 0;
     while (true) {
         cron_poll();
         pending_commands_poll();
         shell_run();
+        uint64_t now = hal_time_us();
+        if (now - last_tick >= 1000000) {
+            module_fire_event(MODULE_EVENT_TICK, NULL);
+            last_tick = now;
+        }
         hal_sleep_ms(1);
     }
 }

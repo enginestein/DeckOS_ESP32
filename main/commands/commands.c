@@ -38,9 +38,12 @@
 #include "shell.h"
 #include "commands.h"
 #include "kernel.h"
-
-void cron_poll(void) {
-}
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_flash.h"
+#include "esp_efuse.h"
+#include "esp_mac.h"
+#include "esp_system.h"
 
 static void cmd_usb(int argc, char *argv[]) { (void)argc; (void)argv; printf("usb: not implemented\n"); }
 static void cmd_hid(int argc, char *argv[]) { (void)argc; (void)argv; printf("hid: not implemented\n"); }
@@ -86,9 +89,9 @@ static void cmd_help(int argc, char *argv[]) {
         {"pull", "pull <pin> up | down | none"},
         {"pin", "snapshot of all GPIO states"},
         {"wdog", "watchdog status"},
-        {"oled", "SSD1306 128x64 I2C display"},
         {"board", "ESP32 board info"},
         {"psram", "PSRAM size and free"},
+        {"flash", "read|write|erase raw SPI flash access"},
     };
     static const entry_t g_buses[] = {
         {"i2c", "scan [sda scl] | read | write | dump"},
@@ -99,16 +102,6 @@ static void cmd_help(int argc, char *argv[]) {
         {"la", "logic analyser <pin> [samples] [us] [trigger]"},
         {"scope", "<pin> <hz> <ms> clean waveform viewer"},
         {"detect", "scan | uart <pin> | analyze <pin>"},
-        {"imu", "MPU6050 read|stream|attitude|calibrate"},
-    };
-    static const entry_t g_servo[] = {
-        {"servo", "<pin> <angle> | sweep | bg sweep/goto/stop"},
-    };
-    static const entry_t g_audio[] = {
-        {"tone", "<pin> <note|Hz> [ms] passive buzzer"},
-        {"melody", "<pin> <C4:200 E4:200 ...> | elise | canon"},
-        {"morse", "<text> [wpm] blink LED in morse"},
-        {"piano", "<pin> play buzzer from keyboard"},
     };
     static const entry_t g_scripting[] = {
         {"sleep", "sleep <ms>"},
@@ -120,6 +113,8 @@ static void cmd_help(int argc, char *argv[]) {
         {"time", "time <cmd> measure execution time"},
         {"alias", "alias [name [cmd...]] define/list aliases"},
         {"unalias", "unalias <name> remove an alias"},
+        {"script", "<file> run a DeckOS script file"},
+        {"run", "<commands...> run inline script commands"},
     };
     static const entry_t g_system[] = {
         {"reboot", "reboot via watchdog"},
@@ -132,6 +127,12 @@ static void cmd_help(int argc, char *argv[]) {
         {"history", "[clear] command history"},
         {"uname", "[-a] system identity"},
         {"rand", "[min] [max] hardware random number"},
+        {"edit", "<file> open text editor (needs editor module)"},
+        {"module", "load|unload|list <name> manage modules"},
+        {"clock", "CPU clock frequency"},
+        {"stack", "current task stack high water mark"},
+        {"uid", "chip unique identifier (MAC)"},
+        {"fault", "panic/fault info"},
     };
     static const entry_t g_fs[] = {
         {"ls", "list directory [path]"},
@@ -152,47 +153,7 @@ static void cmd_help(int argc, char *argv[]) {
         {"find", "recursive name search"},
         {"df", "filesystem usage summary"},
         {"tree", "print directory tree"},
-    };
-    static const entry_t g_bluetooth[] = {
-        {"bt init", "init Bluetooth (SPP)"},
-        {"bt deinit", "power down Bluetooth"},
-        {"bt status", "show connection state"},
-        {"bt shell", "interactive BT shell"},
-    };
-    static const entry_t g_wifi[] = {
-        {"wifi init", "init WiFi subsystem"},
-        {"wifi ap <ssid> [pass]", "start softAP mode"},
-        {"wifi scan", "scan for networks"},
-        {"wifi join <ssid> <pass>", "connect to network"},
-        {"wifi disconnect", "disconnect from network"},
-        {"wifi status", "show connection state"},
-        {"wifi get <url>", "HTTP GET request"},
-        {"wifi post <url> <body>", "HTTP POST request"},
-    };
-    static const entry_t g_camera[] = {
-        {"camera init", "initialise the camera"},
-        {"camera capture", "capture and dump JPEG info"},
-        {"camera save [path]", "save capture to SPIFFS"},
-        {"camera ls", "list saved captures"},
-        {"camera info", "show camera info"},
-        {"camera res", "set resolution"},
-        {"camera quality", "set JPEG quality"},
-        {"camera stream", "start/stop MJPEG stream"},
-    };
-    static const entry_t g_swarm[] = {
-        {"swarm init", "start ESP-NOW mesh"},
-        {"swarm id <name>", "set this node's name"},
-        {"swarm mac", "show this node's MAC"},
-        {"swarm peer <MAC>", "register a peer node"},
-        {"swarm pub", "broadcast position telemetry"},
-        {"swarm list", "show all known peers"},
-        {"swarm stop", "stop the mesh"},
-    };
-    static const entry_t g_nrf24[] = {
-        {"nrf24 init", "init NRF24L01+ on SPI"},
-        {"nrf24 send", "transmit data"},
-        {"nrf24 listen", "receive mode"},
-        {"nrf24 status", "show registers"},
+        {"save", "persist VFS to flash"},
     };
     static const entry_t g_usb[] = {
         {"usb", "status|list|export|import|sync|rm|format USB mass-storage disk"},
@@ -206,16 +167,9 @@ static void cmd_help(int argc, char *argv[]) {
         {"hardware",   g_hardware, COUNT(g_hardware)},
         {"buses",      g_buses,    COUNT(g_buses)},
         {"probes",     g_probes,   COUNT(g_probes)},
-        {"servo",      g_servo,    COUNT(g_servo)},
-        {"audio",      g_audio,    COUNT(g_audio)},
         {"scripting",  g_scripting,COUNT(g_scripting)},
         {"system",     g_system,   COUNT(g_system)},
         {"filesystem", g_fs,       COUNT(g_fs)},
-        {"bluetooth",  g_bluetooth,COUNT(g_bluetooth)},
-        {"wifi",       g_wifi,     COUNT(g_wifi)},
-        {"swarm",      g_swarm,    COUNT(g_swarm)},
-        {"camera",     g_camera,   COUNT(g_camera)},
-        {"nrf24",      g_nrf24,    COUNT(g_nrf24)},
         {"usb",        g_usb,      COUNT(g_usb)},
     };
 #undef COUNT
@@ -1287,7 +1241,7 @@ static void cmd_cron(int argc, char *argv[]) {
     int delay_ms = atoi(argv[1]);
     if (delay_ms < 100 || delay_ms > 60000) { printf("delay 100-60000 ms\n"); return; }
     char cmd[256]; argv_join(cmd, sizeof(cmd), argc, argv, 2);
-    printf("cron delayed execution not implemented: %s\n", cmd);
+    cron_schedule(cmd, (uint32_t)delay_ms);
     printf("Scheduled in %d ms: %s\n", delay_ms, cmd);
 }
 
@@ -1779,13 +1733,186 @@ static void cmd_swarm(int argc, char *argv[]) {
         }
     } else if (strcmp(argv[1], "stop") == 0) {
         swarm_stop();
-    } else {
-        printf("swarm: unknown subcommand '%s'\n", argv[1]);
+        } else {
+            printf("swarm: unknown subcommand '%s'\n", argv[1]);
+        }
     }
+
+static void cmd_edit(int argc, char *argv[]) {
+    if (argc < 2) { printf("usage: edit <file>\n"); return; }
+    if (!module_is_loaded("editor")) {
+        printf("edit: editor module not loaded. Run 'module load editor' first\n");
+        return;
+    }
+    editor_run(argv[1]);
+}
+
+static void cmd_module(int argc, char *argv[]) {
+    if (argc < 2) { printf("usage: module load|unload|list <name>\n"); return; }
+    if (strcmp(argv[1], "list") == 0) {
+        int n = module_total_count();
+        printf("modules:\n");
+        printf("  %-10s %-6s %-7s  %s\n", "name", "state", "ram", "description");
+        uint32_t loaded_ram = 0;
+        for (int i = 0; i < n; i++) {
+            const module_t *m = module_total_get(i);
+            if (!m) continue;
+            printf("  %-10s %-6s %4lu KB  %s\n",
+                m->name,
+                m->loaded ? "LOADED" : "-",
+                (unsigned long)(m->ram_bytes / 1024),
+                m->description);
+            if (m->loaded) loaded_ram += m->ram_bytes;
+        }
+        printf("  ----\n  loaded RAM: %lu KB\n", (unsigned long)(loaded_ram / 1024));
+        printf("  usage: module load <name> | module unload <name> | module list\n");
+    } else if (strcmp(argv[1], "load") == 0 && argc >= 3) {
+        module_load(argv[2]);
+    } else if (strcmp(argv[1], "unload") == 0 && argc >= 3) {
+        module_unload(argv[2]);
+    } else printf("unknown module subcommand\n");
+}
+
+static void cmd_save(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    vfs_save();
+    printf("VFS saved\n");
+}
+
+static void cmd_script(int argc, char *argv[]) {
+    if (argc < 2) { printf("usage: script <file>\n"); return; }
+    script_run_file(argv[1]);
+}
+
+static void cmd_run(int argc, char *argv[]) {
+    if (argc < 2) { printf("usage: run <command...>\n"); return; }
+    char line[SCRIPT_LINE_LEN * 2];
+    line[0] = '\0';
+    for (int i = 1; i < argc; i++) {
+        if (i > 1) strncat(line, " ", sizeof(line) - strlen(line) - 1);
+        strncat(line, argv[i], sizeof(line) - strlen(line) - 1);
+    }
+    script_ctx_t ctx;
+    script_ctx_init(&ctx);
+    script_run_string(&ctx, line);
+}
+
+static void cmd_flash(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("usage: flash read <addr_hex> <len> | write <addr_hex> <hex_bytes...> | erase <sector_hex>\n");
+        return;
+    }
+    if (strcmp(argv[1], "read") == 0 && argc >= 4) {
+        uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 16);
+        uint32_t len = (uint32_t)atoi(argv[3]);
+        if (len > 1024) { printf("max 1024 bytes\n"); return; }
+        uint8_t *buf = malloc(len);
+        if (!buf) { printf("OOM\n"); return; }
+        if (esp_flash_read(NULL, buf, addr, len) == ESP_OK) {
+            for (uint32_t i = 0; i < len; i++) {
+                printf("%02X ", buf[i]);
+                if ((i + 1) % 16 == 0) printf("\n");
+            }
+            if (len % 16) printf("\n");
+        } else printf("flash read failed\n");
+        free(buf);
+    } else if (strcmp(argv[1], "write") == 0 && argc >= 4) {
+        uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 16);
+        uint8_t data[64]; int dlen = 0;
+        for (int a = 3; a < argc && dlen < 64; a++) {
+            unsigned long v = strtoul(argv[a], NULL, 16);
+            if (v > 0xFF) { printf("byte value 0-255\n"); return; }
+            data[dlen++] = (uint8_t)v;
+        }
+        if (esp_flash_write(NULL, data, addr, (uint32_t)dlen) == ESP_OK)
+            printf("wrote %d bytes to 0x%08lX\n", dlen, (unsigned long)addr);
+        else printf("flash write failed\n");
+    } else if (strcmp(argv[1], "erase") == 0 && argc >= 3) {
+        uint32_t sector = (uint32_t)strtoul(argv[2], NULL, 16);
+        if (esp_flash_erase_region(NULL, sector * 4096, 4096) == ESP_OK)
+            printf("erased sector 0x%08lX\n", (unsigned long)sector);
+        else printf("flash erase failed\n");
+    } else printf("unknown flash subcommand\n");
+}
+
+static void cmd_stack(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    UBaseType_t high = uxTaskGetStackHighWaterMark(NULL);
+    printf("current task stack high water mark: %u words (%u bytes)\n",
+           (unsigned)high, (unsigned)(high * 4));
+}
+
+static void cmd_clock(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+#if CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ
+    printf("CPU frequency: %d MHz\n", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+#else
+    printf("CPU frequency: unknown\n");
+#endif
+}
+
+static void cmd_uid(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    printf("UID (MAC): %02X:%02X:%02X:%02X:%02X:%02X\n",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static void cmd_fault(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    esp_reset_reason_t reason = esp_reset_reason();
+    printf("fault info:\n");
+    printf("  reset reason : %d", reason);
+    switch (reason) {
+        case ESP_RST_UNKNOWN:   printf(" (unknown)\n"); break;
+        case ESP_RST_POWERON:   printf(" (power-on)\n"); break;
+        case ESP_RST_EXT:       printf(" (external pin)\n"); break;
+        case ESP_RST_SW:        printf(" (software reset)\n"); break;
+        case ESP_RST_PANIC:     printf(" (PANIC / abort)\n"); break;
+        case ESP_RST_INT_WDT:   printf(" (interrupt watchdog)\n"); break;
+        case ESP_RST_TASK_WDT:  printf(" (task watchdog)\n"); break;
+        case ESP_RST_WDT:       printf(" (other watchdog)\n"); break;
+        case ESP_RST_DEEPSLEEP: printf(" (deep sleep exit)\n"); break;
+        case ESP_RST_BROWNOUT:  printf(" (brownout)\n"); break;
+        case ESP_RST_SDIO:      printf(" (SDIO)\n"); break;
+        default:                printf("\n"); break;
+    }
+    TaskHandle_t task = xTaskGetCurrentTaskHandle();
+    if (task) printf("  current task: %s\n", pcTaskGetName(task));
+    printf("  uptime       : %lu ms\n", (unsigned long)(hal_time_us() / 1000));
+    printf("  free heap    : %lu bytes\n", (unsigned long)esp_get_free_heap_size());
+#if CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ
+    printf("  CPU freq     : %d MHz\n", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+#endif
 }
 
 typedef void (*cmd_func_t)(int argc, char *argv[]);
 typedef struct { const char *name; cmd_func_t func; } cmd_entry_t;
+
+#define MAX_DYNAMIC_CMDS 32
+static cmd_entry_t s_cmd_dynamic[MAX_DYNAMIC_CMDS];
+static int s_cmd_dynamic_count = 0;
+
+void commands_api_register(const char *name, const char *desc, void (*handler)(int, char**)) {
+    (void)desc;
+    if (s_cmd_dynamic_count >= MAX_DYNAMIC_CMDS) {
+        printf("cmd_api: max dynamic commands (%d) reached\n", MAX_DYNAMIC_CMDS);
+        return;
+    }
+    s_cmd_dynamic[s_cmd_dynamic_count].name = name;
+    s_cmd_dynamic[s_cmd_dynamic_count].func = handler;
+    s_cmd_dynamic_count++;
+}
+
+void commands_api_unregister(const char *name) {
+    for (int i = 0; i < s_cmd_dynamic_count; i++) {
+        if (strcmp(s_cmd_dynamic[i].name, name) == 0) {
+            s_cmd_dynamic[i] = s_cmd_dynamic[--s_cmd_dynamic_count];
+            return;
+        }
+    }
+}
 
 static int cmd_func_compare(const void *a, const void *b) {
     return strcmp(((const cmd_entry_t*)a)->name, ((const cmd_entry_t*)b)->name);
@@ -1798,11 +1925,10 @@ static const cmd_entry_t s_cmd_table[] = {
     {"avg",       cmd_avg},
     {"bench",     cmd_bench},
     {"board",     cmd_board},
-    {"bt",        cmd_bt},
-    {"camera",    cmd_camera},
     {"cat",       cmd_cat},
     {"cd",        cmd_cd},
     {"clear",     cmd_clear},
+    {"clock",     cmd_clock},
     {"config",    cmd_config},
     {"console",   cmd_console},
     {"cp",        cmd_cp},
@@ -1812,7 +1938,10 @@ static const cmd_entry_t s_cmd_table[] = {
     {"df",        cmd_df},
     {"drivers",   cmd_drivers},
     {"echo",      cmd_echo},
+    {"edit",      cmd_edit},
+    {"fault",     cmd_fault},
     {"find",      cmd_find},
+    {"flash",     cmd_flash},
     {"free",      cmd_free},
     {"gpio",      cmd_gpio},
     {"grep",      cmd_grep},
@@ -1821,19 +1950,15 @@ static const cmd_entry_t s_cmd_table[] = {
     {"hid",       cmd_hid},
     {"history",   cmd_history},
     {"i2c",       cmd_i2c},
-    {"imu",       cmd_imu},
     {"iwrite",    cmd_iwrite},
     {"jobs",      cmd_jobs},
     {"la",        cmd_la},
     {"led",       cmd_led},
     {"ls",        cmd_ls},
-    {"melody",    cmd_melody},
     {"mem",       cmd_mem},
     {"mkdir",     cmd_mkdir},
-    {"morse",     cmd_morse},
+    {"module",    cmd_module},
     {"mv",        cmd_mv},
-    {"oled",      cmd_oled},
-    {"piano",     cmd_piano},
     {"pin",       cmd_pin},
     {"power",     cmd_power},
     {"psram",     cmd_psram},
@@ -1844,24 +1969,26 @@ static const cmd_entry_t s_cmd_table[] = {
     {"reboot",    cmd_reboot},
     {"repeat",    cmd_repeat},
     {"rm",        cmd_rm},
+    {"run",       cmd_run},
+    {"save",      cmd_save},
     {"scope",     cmd_scope},
-    {"servo",     cmd_servo},
+    {"script",    cmd_script},
     {"sleep",     cmd_sleep},
     {"spi",       cmd_spi},
+    {"stack",     cmd_stack},
     {"stat",      cmd_stat},
     {"stats",     cmd_stats},
-    {"swarm",     cmd_swarm},
     {"sysinfo",   cmd_sysinfo},
     {"syslog",    cmd_syslog},
     {"tasks",     cmd_tasks},
     {"temp",      cmd_temp},
     {"time",      cmd_time},
-    {"tone",      cmd_tone},
     {"top",       cmd_top},
     {"touch",     cmd_touch},
     {"tree",      cmd_tree},
     {"trigger",   cmd_trigger},
     {"uart",      cmd_uart},
+    {"uid",       cmd_uid},
     {"unalias",   cmd_unalias},
     {"uname",     cmd_uname},
     {"uptime",    cmd_uptime},
@@ -1870,7 +1997,6 @@ static const cmd_entry_t s_cmd_table[] = {
     {"watch",     cmd_watch},
     {"wc",        cmd_wc},
     {"wdog",      cmd_wdog},
-    {"wifi",      cmd_wifi},
     {"write",     cmd_write},
 };
 
@@ -1920,6 +2046,13 @@ bool commands_execute(const char *line) {
         return true;
     }
 
+    for (int i = 0; i < s_cmd_dynamic_count; i++) {
+        if (strcmp(s_cmd_dynamic[i].name, argv_[0]) == 0) {
+            s_cmd_dynamic[i].func(argc, argv_);
+            return true;
+        }
+    }
+
     s_unknown_count++;
     printf("unknown command: %s\n", argv_[0]);
     return false;
@@ -1928,7 +2061,8 @@ bool commands_execute(const char *line) {
 void commands_init(void) {
     s_boot_us = hal_time_us();
     srand((unsigned)hal_time_us());
-    printf("commands initted (%d commands)\n", s_cmd_count_tbl);
+    module_set_cmd_api(commands_api_register, commands_api_unregister);
+    printf("commands initted (%d commands + %d dynamic slots)\n", s_cmd_count_tbl, MAX_DYNAMIC_CMDS);
 }
 
 void commands_list(void) {

@@ -1,14 +1,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "esp_now.h"
-#include "esp_wifi.h"
-#include "esp_mac.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "esp_wifi.h"
+#include "esp_now.h"
+#include "esp_event.h"
+#include "esp_mac.h"
+#include "nvs_flash.h"
 #include "hal.h"
+#include "wifi.h"
 #include "swarm.h"
 
 #define TAG "swarm"
@@ -77,12 +77,7 @@ static void swarm_send_cb(const uint8_t *mac, esp_now_send_status_t status) {
 bool swarm_init(void) {
     if (s_active) return true;
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    wifi_ensure_core();
     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
 
     ESP_ERROR_CHECK(esp_now_init());

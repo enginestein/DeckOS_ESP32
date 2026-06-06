@@ -16,6 +16,8 @@ typedef struct {
 } wifi_ap_t;
 
 bool        wifi_init(void);
+bool        wifi_ensure_core(void);
+void        wifi_deinit(void);
 bool        wifi_scan(wifi_ap_t* aps, int max, int* count);
 bool        wifi_connect(const char* ssid, const char* pass);
 void        wifi_disconnect(void);

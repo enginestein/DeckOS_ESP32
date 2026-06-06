@@ -20,6 +20,17 @@ static char wifi_ip[16] = "";
 static int8_t wifi_rssi = 0;
 static esp_netif_t* netif = NULL;
 static bool wifi_inited = false;
+static bool s_wifi_core_inited = false;
+
+bool wifi_ensure_core(void) {
+    if (s_wifi_core_inited) return true;
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    if (esp_wifi_init(&cfg) != ESP_OK) return false;
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) return false;
+    if (esp_wifi_start() != ESP_OK) return false;
+    s_wifi_core_inited = true;
+    return true;
+}
 
 static void event_handler(void* arg, esp_event_base_t base, int32_t id, void* data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -29,7 +40,7 @@ static void event_handler(void* arg, esp_event_base_t base, int32_t id, void* da
         wifi_ip[0] = '\0';
         xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
-        // client connected to AP — nothing special to do
+        // client connected to AP nothing special to do
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* ev = (ip_event_got_ip_t*)data;
         snprintf(wifi_ip, sizeof(wifi_ip), IPSTR, IP2STR(&ev->ip_info.ip));
@@ -37,7 +48,7 @@ static void event_handler(void* arg, esp_event_base_t base, int32_t id, void* da
         wifi_state = WIFI_CONNECTED;
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECT_BIT);
     } else if (base == IP_EVENT && id == IP_EVENT_AP_STAIPASSIGNED) {
-        // AP client got IP — grab AP interface IP
+        // AP client got IP grab AP interface IP
         esp_netif_ip_info_t ip;
         esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip);
         snprintf(wifi_ip, sizeof(wifi_ip), IPSTR, IP2STR(&ip.ip));
@@ -48,19 +59,13 @@ bool wifi_init(void) {
     if (wifi_inited) return true;
 
     wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
     netif = esp_netif_create_default_wifi_sta();
     assert(netif);
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    if (!wifi_ensure_core()) return false;
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
 
     wifi_inited = true;
     printf("[wifi] ESP32 native WiFi ready\n");

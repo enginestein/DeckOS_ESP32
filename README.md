@@ -5,15 +5,20 @@ A port of [DeckOS](https://github.com/enginestein/DeckOS) — a bare-metal embed
 This port introduces a **Hardware Abstraction Layer (HAL)** that decouples the kernel, shell, scripting, and command logic from the MCU hardware, allowing the same high-level codebase to target both the RP2040 and ESP32.
 
 ```
-+------------------------------------------+
-|  Shell / Commands / DeckScript / VFS     |
-+------------------------------------------+
-|  Kernel / Scheduler / Syslog / Modules   |
-+------------------------------------------+
-|  HAL (GPIO, I2C, SPI, ADC, PWM, UART)   |
-+------------------------------------------+
-|  ESP-IDF / FreeRTOS / ESP32 Hardware     |
-+------------------------------------------+
++----------------------------------------------+
+|  Shell / Commands / DeckScript / VFS         |
+|  command_table[] (built-in) + s_dynamic[]    |
+|  (dynamic commands from loaded modules)      |
++----------------------------------------------+
+|  Module Registry (s_modules[] + plugins)     |
+|  load/unload lifecycle, event dispatch       |
++----------------------------------------------+
+|  Kernel / Scheduler / Syslog / Config        |
++----------------------------------------------+
+|  HAL (GPIO, I2C, SPI, ADC, PWM, UART)        |
++----------------------------------------------+
+|  ESP-IDF / FreeRTOS / ESP32 Hardware          |
++----------------------------------------------+
 ```
 
 ---
@@ -47,6 +52,7 @@ This port introduces a **Hardware Abstraction Layer (HAL)** that decouples the k
 - [Partition layout](#partition-layout)
 - [Project layout](#project-layout)
 - [Original RP2040 DeckOS](#original-rp2040-deckos)
+- [Demo](#demo)
 
 ---
 
@@ -63,7 +69,7 @@ This port introduces a **Hardware Abstraction Layer (HAL)** that decouples the k
 | **USB** | TinyUSB (CDC + MSC + HID) | ESP-IDF USB CDC only |
 | **WiFi** | External ESP8266 (UART bridge) | **Native ESP-IDF WiFi** |
 | **ESP-NOW** | Via ESP8266 bridge | **Native ESP-NOW** |
-| **Bluetooth** | External HC-05 (UART) | Stubbed (BT disabled for DRAM) |
+| **Bluetooth** | External HC-05 (UART) | **Module (BT SPP, ~48 KB)** |
 | **Filesystem** | VFS persisted to raw flash | VFS persisted to **SPIFFS** (2 MB partition) |
 | **Config** | Last 4 KB of flash (CRC32) | **NVS** (key-value storage) |
 | **Camera** | External ESP32-CAM bridge | **Native esp32-camera driver** |
@@ -81,6 +87,16 @@ This port introduces a **Hardware Abstraction Layer (HAL)** that decouples the k
 - **PSRAM support** — auto-detected and heap-allocated via `SPIRAM_USE_CAPS_ALLOC`
 - **Board auto-detection** — ESP32-WROOM vs ESP32-CAM vs ESP32-S3
 - **Hardware Abstraction Layer** — clean platform abstraction for all peripherals
+- **Dynamic command registration** — modules inject commands at runtime
+- **Module system** — loadable modules with lifecycle events
+- **DeckScript** — built-in scripting language with full control flow
+- **Editor module** — nano-style text editor (edit command)
+- **VFS save** — persist VFS files to SPIFFS
+- **Flash access** — raw flash read/write commands
+- **Stack monitoring** — FreeRTOS task stack high-water mark
+- **Clock frequency** — CPU speed readout
+- **Unique ID** — MAC-based unique identifier
+- **Fault handler** — panic info display
 
 ---
 
@@ -169,8 +185,112 @@ hal init -> NVS -> SPIFFS -> board detect -> kernel_init()
   ├── drivers_init_all()  (ADC, GPIO, PWM, I2C0, SPI0)
   ├── sched_init()        (FreeRTOS task on Core 1)
   ├── modules_init()
+  ├── module_set_cmd_api()
+  ├── module_fire_event(BOOT_COMPLETE)
   └── shell_init()        (command registration, prompt)
 ```
+
+---
+
+## Module System
+
+DeckOS_ESP32 uses a loadable module architecture. Features that carry a RAM
+footprint are packaged as **modules** that allocate memory only when loaded.
+Community extensions are supported through the **plugin API** — third-party
+code can register commands, listen to events, and participate in the module
+lifecycle without modifying the core firmware.
+
+### Module Commands
+
+| Command | What it does |
+|---|---|
+| `module list` | List all modules, their load state, and RAM cost |
+| `module load <name>` | Allocate the module's buffers and enable it |
+| `module unload <name>` | Free the module's buffers |
+
+### Available Modules
+
+| Module | Description | RAM |
+|---|---|---|
+| `editor` | Nano-style text editor (edit command) | ~96 KB |
+| `wifi` | Native ESP32 WiFi (init/ap/scan/join/disconnect/status) | ~32 KB |
+| `bluetooth` | Native ESP32 BT SPP (init/shell/exec/top/send/recv) | ~48 KB |
+| `servo` | Servo control (pin angle/sweep/bg) | ~1 KB |
+| `oled` | SSD1306 OLED display (init/on/off/clear/text/line/rect) | ~2 KB |
+| `swarm` | ESP-NOW mesh (init/id/mac/peer/pub/list/stop) | ~8 KB |
+| `nrf24` | NRF24L01+ radio (init/send/listen/status) | ~2 KB |
+| `camera` | ESP32-CAM camera (init/capture/save/stream) | ~64 KB |
+| `imu` | MPU6050 accelerometer/gyro (read/stream/attitude) | ~2 KB |
+| `tone` | Audio tone generation | ~1 KB |
+| `morse` | Morse code signalling | ~1 KB |
+| `plugin-example` | Example community plugin template | ~1 KB |
+
+### Usage
+
+```bash
+> module list
+modules:
+  name       state  ram      description
+  editor     -        96 KB  nano-style text editor (edit command)
+  wifi       -        32 KB  Native ESP32 WiFi
+  bluetooth  -        48 KB  Bluetooth SPP
+  servo      -         2 KB  Servo control
+  ...
+  loaded RAM: 0 KB
+  usage: module load <name> | module unload <name> | module list
+
+> module load wifi
+> wifi scan
+> module unload wifi
+```
+
+### Plugin API
+
+Community plugins register themselves with `module_register_plugin()` and can:
+
+- Register shell commands (auto-registered on load, unregistered on unload)
+- Listen for lifecycle events (MODULE_EVENT_BOOT_COMPLETE, TICK, PRE_COMMAND, POST_COMMAND)
+- Declare load/unload hooks and semver version
+
+**Writing a plugin:**
+
+```c
+// modules/my_plugin.c
+#include "module.h"
+#include "commands.h"
+
+static void cmd_hello(int argc, char *argv[]) {
+    printf("Hello from my plugin!\n");
+}
+
+static module_cmd_t s_cmds[] = {
+    {"hello", "My plugin greeting", cmd_hello},
+};
+
+plugin_api_t MY_PLUGIN = {
+    .init   = my_load,
+    .deinit = my_unload,
+    .commands     = s_cmds,
+    .command_count = 1,
+};
+```
+
+Then add a `module_t` entry in `kernel/module.c`.
+
+### Event System
+
+| Event | When fired |
+|---|---|
+| `BOOT_COMPLETE` | After kernel_init() completes |
+| `TICK` | Roughly once per second |
+| `PRE_COMMAND` | Before a CLI command executes |
+| `POST_COMMAND` | After a CLI command executes |
+| `PEER_DISCOVERED` | When a swarm mesh peer is found |
+| `CUSTOM_START` | Base for user-defined events (100+) |
+
+### Dynamic Command Registration
+
+Loaded modules inject commands through `commands_api_register()`/`commands_api_unregister()`, which maintain a dynamic command table (32 slots). This allows modules to add and remove commands at runtime without recompiling the core firmware.
 
 ---
 
@@ -190,6 +310,7 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 | `sysinfo` | `sysinfo` | Full system summary |
 | `stats` | `stats` | Runtime statistics |
 | `top` | `top` | Live task monitor |
+| `uid` | `uid` | Unique device ID (MAC) |
 
 ### Hardware
 
@@ -209,6 +330,7 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 | `wdog` | `wdog` | Watchdog status |
 | `board` | `board` | ESP32 board info |
 | `psram` | `psram` | PSRAM size and free |
+| `clock` | `clock` | CPU frequency |
 
 ### Buses
 
@@ -257,6 +379,14 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 | `time` | `<command>` | Measure execution time |
 | `alias` | `[name [cmd...]]` | Define or list aliases |
 | `unalias` | `<name>` | Remove an alias |
+| `script` | `script <run\|list>` | DeckScript scripting |
+| `run` | `run <file>` | Execute a DeckScript file |
+
+### Editor
+
+| Command | Usage | Description |
+|---|---|---|
+| `edit` | `edit <file>` | Nano-style text editor |
 
 ### System
 
@@ -272,6 +402,9 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 | `history` | `[clear]` | Command history |
 | `uname` | `[-a]` | System identity |
 | `rand` | `[min] [max]` | Hardware random number |
+| `module` | `module <load\|unload\|list>` | Module management |
+| `stack` | `stack` | Task stack high-water mark |
+| `fault` | `fault` | Panic info |
 
 ### Filesystem
 
@@ -296,6 +429,8 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 | `find` | `[name]` | Recursive search |
 | `df` | `df` | Filesystem usage |
 | `tree` | `tree` | Directory tree |
+| `save` | `save` | Persist VFS to SPIFFS |
+| `flash` | `flash <read\|write\|erase>` | Raw flash access |
 
 ### WiFi
 
@@ -536,6 +671,8 @@ On ESP32-CAM boards, the camera subsystem provides OV2640 image capture and MJPE
 | PCLK | 22 |
 | D0-D7 | 5, 18, 19, 21, 36, 39, 34, 35 |
 
+Or you can just buy an ESP32-CAM programmer, which cuts all these connection efforts.
+
 ### Usage
 
 ```bash
@@ -691,17 +828,11 @@ MPU6050 6-axis accelerometer/gyroscope on I²C.
 
 ## Modules
 
-On-demand RAM modules. Currently the **text editor** is the only bundled module.
+See the [Module System](#module-system) section above for the full list of available modules, usage, and the plugin API.
 
-```bash
-> module list
-  editor     -        ~9 KB   nano-style text editor (edit command)
-> module load editor
-> edit /home/blink.ds
-> module unload editor
-```
+### Text Editor (`edit`)
 
-The editor supports: arrow keys, Home/End, PgUp/PgDn, Ctrl-S (save), Ctrl-Q/X (quit), Ctrl-K (cut line), Ctrl-Y (paste), Ctrl-U (insert line), Ctrl-F (find), Ctrl-Z (undo), Ctrl-G (help).
+The editor module supports: arrow keys, Home/End, PgUp/PgDn, Ctrl-S (save), Ctrl-Q/X (quit), Ctrl-K (cut line), Ctrl-Y (paste), Ctrl-U (insert line), Ctrl-F (find), Ctrl-Z (undo), Ctrl-G (help).
 
 ---
 
@@ -948,5 +1079,14 @@ DeckOS_ESP32/
 The original DeckOS for RP2040 is at [github.com/enginestein/DeckOS](https://github.com/enginestein/DeckOS). It features:
 
 ---
+
+---
+
+## Demo
+
+https://github.com/user-attachments/assets/29c5ad36-af89-499c-b757-9b31cec9b44c
+
+---
+
 
 *Who doesn't love a decent shell?*

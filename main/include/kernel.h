@@ -11,3 +11,4 @@ void kernel_poll(void);
 void kernel_enqueue_command(const char* cmd);
 void pending_commands_poll(void);
 void cron_poll(void);
+void cron_schedule(const char *cmd, uint32_t delay_ms);

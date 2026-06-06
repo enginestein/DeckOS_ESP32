@@ -46,12 +46,24 @@ idf_component_register(
         communication/uart_pass.c
         communication/uart_detect.c
         hardware/servo.c
+        modules/mod_wifi.c
+        modules/mod_bt.c
+        modules/mod_servo.c
+        modules/mod_oled.c
+        modules/mod_swarm.c
+        modules/mod_nrf24.c
+        modules/mod_camera.c
+        modules/mod_imu.c
+        modules/mod_tone.c
+        modules/mod_morse.c
+        modules/plugin_example.c
     INCLUDE_DIRS
         include
         hal
         drivers/camera
         communication
     REQUIRES
+        efuse
         esp_timer
         esp_system
         esp_event
