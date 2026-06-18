@@ -49,6 +49,8 @@ static void cmd_usb(int argc, char *argv[]) { (void)argc; (void)argv; printf("us
 static void cmd_hid(int argc, char *argv[]) { (void)argc; (void)argv; printf("hid: not implemented\n"); }
 static void cmd_console(int argc, char *argv[]) { (void)argc; (void)argv; printf("console: not implemented\n"); }
 extern void cmd_imu(int argc, char *argv[]);
+extern void cmd_ota(int argc, char *argv[]);
+extern void cmd_dashboard(int argc, char *argv[]);
 
 extern flash_config_t g_config;
 
@@ -196,7 +198,7 @@ static void cmd_help(int argc, char *argv[]) {
         return;
     }
 
-    printf("DeckOS v6.0  --  command groups\n");
+    printf("DeckOS v2.0  --  command groups\n");
     printf("====================================================\n\n");
     fflush(stdout);
     for (int g = 0; g < group_count; g++)
@@ -209,7 +211,7 @@ static void cmd_help(int argc, char *argv[]) {
 static void cmd_version(int argc, char *argv[]) {
     (void)argc; (void)argv;
     const board_info_t *b = board_detect();
-    printf("DeckOS v6.0  |  %s\n", b->name);
+    printf("DeckOS v2.0  |  %s\n", b->name);
     printf("Build: %s %s\n", __DATE__, __TIME__);
 }
 
@@ -1334,7 +1336,7 @@ static void cmd_sysinfo(int argc, char *argv[]) {
     (void)argc; (void)argv;
     const board_info_t *b = board_detect();
     printf("========================================\n");
-    printf("DeckOS v6.0\n");
+    printf("DeckOS v2.0\n");
     printf("Board: %s\n", b->name);
     printf("Build: %s %s\n", __DATE__, __TIME__);
     printf("uptime: ");
@@ -1349,7 +1351,7 @@ static void cmd_sysinfo(int argc, char *argv[]) {
 static void cmd_uname(int argc, char *argv[]) {
     bool all = (argc > 1 && strcmp(argv[1], "-a") == 0);
     const board_info_t *b = board_detect();
-    printf("DeckOS v6.0 %s", b->name);
+    printf("DeckOS v2.0 %s", b->name);
     if (all) printf(" xtensa-esp32");
     printf("\n");
 }
@@ -1998,6 +2000,8 @@ static const cmd_entry_t s_cmd_table[] = {
     {"wc",        cmd_wc},
     {"wdog",      cmd_wdog},
     {"write",     cmd_write},
+    {"ota",       cmd_ota},
+    {"dashboard", cmd_dashboard},
 };
 
 static const int s_cmd_count_tbl = sizeof(s_cmd_table) / sizeof(s_cmd_table[0]);

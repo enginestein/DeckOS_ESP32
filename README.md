@@ -36,6 +36,8 @@ This port introduces a **Hardware Abstraction Layer (HAL)** that decouples the k
 - [WiFi](#wifi)
 - [ESP-NOW Swarm](#esp-now-swarm)
 - [Camera (ESP32-CAM)](#camera-esp32-cam)
+- [Web Dashboard](#web-dashboard)
+- [ESP-NOW RC Bridge](#esp-now-rc-bridge)
 - [NRF24L01 Radio](#nrf24l01-radio)
 - [Bluetooth](#bluetooth)
 - [OLED (SSD1306)](#oled-ssd1306)
@@ -391,7 +393,7 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 ### System
 
 | Command | Usage | Description |
-|---|---|---|
+|---|---|---|---|
 | `reboot` | `reboot` | Reboot via watchdog |
 | `drivers` | `drivers` | List loaded drivers |
 | `tasks` | `[enable\|disable <id>]` | Background task control |
@@ -405,6 +407,8 @@ Type `help` at the prompt to list all command groups. Use `help <group>` for det
 | `module` | `module <load\|unload\|list>` | Module management |
 | `stack` | `stack` | Task stack high-water mark |
 | `fault` | `fault` | Panic info |
+| `dashboard` | `start\|stop\|status` | Web dashboard server |
+| `ota` | `ota <url>` | OTA firmware update |
 
 ### Filesystem
 
@@ -700,6 +704,72 @@ Or you can just buy an ESP32-CAM programmer, which cuts all these connection eff
 | XGA | 1024×768 |
 | SXGA | 1280×1024 |
 | UXGA | 1600×1200 |
+
+---
+
+## Web Dashboard
+
+The built-in web dashboard serves a browser-based UI at **`http://<esp32-ip>/`** for monitoring and controlling the board without a serial connection.
+
+```bash
+> wifi init
+> wifi join MyWiFi MyPassword
+> dashboard start
+dashboard: http://192.168.1.42/
+> dashboard status
+dashboard: running
+> dashboard stop
+```
+
+### Dashboard features
+
+| Feature | API endpoint | What you can do |
+|---------|-------------|-----------------|
+| **System info** | `/api/sysinfo` | Uptime, CPU, free heap, WiFi state, IP address |
+| **Memory** | `/api/mem` | Total/used/free heap with live bar graph |
+| **File browser** | `/api/ls`, `/api/cat`, `/api/write`, `/api/rm` | Browse, view, upload, and delete VFS files |
+| **GPIO control** | `/api/gpio?pin=N&val=0\|1` | Read/write GPIO pins from the browser |
+| **Script execution** | `/api/script` (POST) | Run any DeckScript command |
+| **Reboot** | `/api/reboot` | Remote restart |
+
+The page auto-refreshes every 5 seconds. All data is served as JSON REST APIs for easy integration with external tools.
+
+---
+
+## ESP-NOW RC Bridge
+
+PPM RC commands can be relayed across ESP-NOW from one ESP32 to another. This lets you place a receiver ESP32 near the RC transmitter and control a remote DeckOS board wirelessly.
+
+### Architecture
+
+```
+[RC Receiver] → PPM → [ESP32 Bridge] ──ESP-NOW──→ [ESP32 DeckOS]
+  (2.4 GHz)          (swarm node A)              (swarm node B)
+                      reads PPM ch 0-3           rc commands fire locally
+                      broadcasts via ESP-NOW     or forward to DeckScript
+```
+
+### Setup
+
+```bash
+# Bridge node (connected to RC receiver's PPM output)
+> wifi init
+> swarm init
+> swarm id bridge
+> ppm init 16 4           # 4 channels from RC receiver on GP16
+> swarm pub once          # broadcast PPM data via ESP-NOW
+> swarm pub every 20      # broadcast every 20 ms (~50 Hz)
+
+# Remote DeckOS node
+> swarm init
+> swarm id deckos
+> swarm peer <bridge_mac>
+> rc set throttle high 1700
+> rc set rudder high 1600
+> rc enable
+```
+
+The bridge reads PPM channels as DeckOS `ppm` values (1000-2000 µs), packs them into the ESP-NOW telemetry payload, and the receiving node extracts them into local variables accessible by the RC command system or DeckScript.
 
 ---
 

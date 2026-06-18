@@ -17,6 +17,8 @@ idf_component_register(
         shell/editor.c
         commands/commands.c
         commands/cmd_imu.c
+        commands/cmd_ota.c
+        commands/dashboard.c
         scripting/dscript.c
         system/board_detect.c
         system/device_detect.c
