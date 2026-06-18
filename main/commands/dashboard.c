@@ -122,7 +122,7 @@ static const char DASHBOARD_HTML[] =
     "refresh();setInterval(refresh,5000)"
     "</script></body></html>";
 
-// ── helpers ───────────────────────────────────────────────────────────
+
 static esp_err_t send_json(httpd_req_t *req, const char *json) {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
@@ -147,7 +147,6 @@ static const char *get_qp(httpd_req_t *req, const char *name) {
     return NULL;
 }
 
-// ── API handlers ──────────────────────────────────────────────────────
 static esp_err_t api_sysinfo(httpd_req_t *req) {
     char buf[512];
     uint64_t ms = esp_timer_get_time() / 1000;
@@ -278,7 +277,7 @@ static esp_err_t serve_index(httpd_req_t *req) {
     return httpd_resp_sendstr(req, DASHBOARD_HTML);
 }
 
-// ── start / stop ──────────────────────────────────────────────────────
+
 bool dashboard_start(void) {
     if (s_dash_httpd) return true;
 
@@ -326,7 +325,7 @@ bool dashboard_running(void) {
     return s_dash_httpd != NULL;
 }
 
-// ── shell command ─────────────────────────────────────────────────────
+
 void cmd_dashboard(int argc, char *argv[]) {
     if (argc > 1) {
         if (strcmp(argv[1], "start") == 0) {
