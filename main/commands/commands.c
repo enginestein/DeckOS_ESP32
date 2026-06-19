@@ -198,7 +198,7 @@ static void cmd_help(int argc, char *argv[]) {
         return;
     }
 
-    printf("DeckOS v2.0  --  command groups\n");
+    printf("DeckOS v3.0  --  command groups\n");
     printf("====================================================\n\n");
     fflush(stdout);
     for (int g = 0; g < group_count; g++)
@@ -211,7 +211,7 @@ static void cmd_help(int argc, char *argv[]) {
 static void cmd_version(int argc, char *argv[]) {
     (void)argc; (void)argv;
     const board_info_t *b = board_detect();
-    printf("DeckOS v2.0  |  %s\n", b->name);
+    printf("DeckOS v3.0  |  %s\n", b->name);
     printf("Build: %s %s\n", __DATE__, __TIME__);
 }
 
@@ -1336,7 +1336,7 @@ static void cmd_sysinfo(int argc, char *argv[]) {
     (void)argc; (void)argv;
     const board_info_t *b = board_detect();
     printf("========================================\n");
-    printf("DeckOS v2.0\n");
+    printf("DeckOS v3.0\n");
     printf("Board: %s\n", b->name);
     printf("Build: %s %s\n", __DATE__, __TIME__);
     printf("uptime: ");
@@ -1351,7 +1351,7 @@ static void cmd_sysinfo(int argc, char *argv[]) {
 static void cmd_uname(int argc, char *argv[]) {
     bool all = (argc > 1 && strcmp(argv[1], "-a") == 0);
     const board_info_t *b = board_detect();
-    printf("DeckOS v2.0 %s", b->name);
+    printf("DeckOS v3.0 %s", b->name);
     if (all) printf(" xtensa-esp32");
     printf("\n");
 }

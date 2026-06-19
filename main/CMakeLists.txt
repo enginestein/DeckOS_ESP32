@@ -19,7 +19,11 @@ idf_component_register(
         commands/cmd_imu.c
         commands/cmd_ota.c
         commands/dashboard.c
-        scripting/dscript.c
+        scripting/dscript_core.c
+        scripting/dscript_vars.c
+        scripting/dscript_expr.c
+        scripting/dscript_builtin.c
+        scripting/dscript_flow.c
         system/board_detect.c
         system/device_detect.c
         system/print_lock.c

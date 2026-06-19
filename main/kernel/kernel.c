@@ -13,6 +13,9 @@
 #include "vfs.h"
 #include "module.h"
 #include "file_persist.h"
+#include "dscript.h"
+#include "autorun_script.h"
+#include "vault_data.h"
 #include "hal.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -88,6 +91,22 @@ void kernel_init(void) {
     modules_init();
     LOG_I("kernel", "modules registered");
 
+    /*if (vfs_resolve("/home/autorun.ds") < 0) {
+        vfs_write("/home/autorun.ds", (const uint8_t*)AUTORUN_SCRIPT,
+                  (uint32_t)strlen(AUTORUN_SCRIPT), false);
+        printf("[kernel] autorun: default script injected\n");
+    }
+
+    if (vfs_resolve("/home/contacts.txt") < 0)
+        vfs_write("/home/contacts.txt", (const uint8_t*)CONTACTS_DATA,
+                  (uint32_t)strlen(CONTACTS_DATA), false);
+    if (vfs_resolve("/home/todo.txt") < 0)
+        vfs_write("/home/todo.txt", (const uint8_t*)TODO_DATA,
+                  (uint32_t)strlen(TODO_DATA), false);
+    if (vfs_resolve("/home/journal.txt") < 0)
+        vfs_write("/home/journal.txt", (const uint8_t*)JOURNAL_DATA,
+                  (uint32_t)strlen(JOURNAL_DATA), false);*/
+
     printf("[kernel] initialized\n");
     shell_init();
     LOG_I("kernel", "shell ready");
@@ -95,8 +114,17 @@ void kernel_init(void) {
 
 void kernel_run(void) {
     static uint64_t last_tick = 0;
+    static bool autorun_checked = false;
     while (true) {
         cron_poll();
+        if (!autorun_checked) {
+            autorun_checked = true;
+            if (vfs_resolve("/home/autorun.ds") >= 0) {
+                printf("[kernel] autorun: executing /home/autorun.ds\n");
+                script_run_file("/home/autorun.ds");
+                printf("[kernel] autorun: complete\n");
+            }
+        }
         pending_commands_poll();
         shell_run();
         uint64_t now = hal_time_us();

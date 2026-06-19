@@ -25,36 +25,89 @@ This port introduces a **Hardware Abstraction Layer (HAL)** that decouples the k
 
 ## Table of Contents
 
-- [Differences from the RP2040 version](#differences-from-the-rp2040-version)
-- [What you need](#what-you-need)
-- [Getting started](#getting-started)
-- [Architecture](#architecture)
-- [Commands](#commands)
-- [Shell](#shell)
-- [Filesystem (VFS)](#filesystem-vfs)
-- [DeckScript](#deckscript)
-- [WiFi](#wifi)
-- [ESP-NOW Swarm](#esp-now-swarm)
-- [Camera (ESP32-CAM)](#camera-esp32-cam)
-- [Web Dashboard](#web-dashboard)
-- [ESP-NOW RC Bridge](#esp-now-rc-bridge)
-- [NRF24L01 Radio](#nrf24l01-radio)
-- [Bluetooth](#bluetooth)
-- [OLED (SSD1306)](#oled-ssd1306)
-- [Servo](#servo)
-- [Audio](#audio)
-- [IMU (MPU6050)](#imu-mpu6050)
-- [Modules](#modules)
-- [Config system](#config-system)
-- [Syslog](#syslog)
-- [Scheduler](#scheduler)
-- [Drivers](#drivers)
-- [Hardware Abstraction Layer (HAL)](#hardware-abstraction-layer-hal)
-- [Board support](#board-support)
-- [Partition layout](#partition-layout)
-- [Project layout](#project-layout)
-- [Original RP2040 DeckOS](#original-rp2040-deckos)
-- [Demo](#demo)
+- [DeckOS for ESP32](#deckos-for-esp32)
+  - [Table of Contents](#table-of-contents)
+  - [Differences from the RP2040 version](#differences-from-the-rp2040-version)
+    - [New in this port](#new-in-this-port)
+  - [What you need](#what-you-need)
+  - [Getting started](#getting-started)
+    - [Prerequisites](#prerequisites)
+    - [Build and flash](#build-and-flash)
+    - [Monitor](#monitor)
+  - [Architecture](#architecture)
+    - [Boot order](#boot-order)
+  - [AutoRun](#autorun)
+    - [How it works](#how-it-works)
+    - [Customization](#customization)
+  - [Module System](#module-system)
+    - [Module Commands](#module-commands)
+    - [Available Modules](#available-modules)
+    - [Usage](#usage)
+    - [Plugin API](#plugin-api)
+    - [Event System](#event-system)
+    - [Dynamic Command Registration](#dynamic-command-registration)
+  - [Commands](#commands)
+    - [Core / Info](#core--info)
+    - [Hardware](#hardware)
+    - [Buses](#buses)
+    - [Probes \& Analysis](#probes--analysis)
+    - [Servo](#servo)
+    - [Audio \& Signalling](#audio--signalling)
+    - [Scripting \& Automation](#scripting--automation)
+    - [Editor](#editor)
+    - [System](#system)
+    - [Filesystem](#filesystem)
+    - [WiFi](#wifi)
+    - [Swarm / ESP-NOW](#swarm--esp-now)
+    - [Camera](#camera)
+    - [NRF24L01](#nrf24l01)
+    - [Bluetooth (stubbed)](#bluetooth-stubbed)
+  - [Shell](#shell)
+    - [Keyboard shortcuts](#keyboard-shortcuts)
+  - [Filesystem (VFS)](#filesystem-vfs)
+    - [VFS layout](#vfs-layout)
+    - [File persistence](#file-persistence)
+  - [DeckScript](#deckscript)
+    - [Features](#features)
+    - [Example](#example)
+    - [Limits](#limits)
+  - [WiFi](#wifi-1)
+    - [Station mode](#station-mode)
+    - [SoftAP mode](#softap-mode)
+    - [HTTP client](#http-client)
+  - [ESP-NOW Swarm](#esp-now-swarm)
+    - [Features](#features-1)
+  - [Camera (ESP32-CAM)](#camera-esp32-cam)
+    - [Pin mapping (ESP32-CAM default)](#pin-mapping-esp32-cam-default)
+    - [Usage](#usage-1)
+    - [Resolutions](#resolutions)
+  - [Web Dashboard](#web-dashboard)
+    - [Dashboard features](#dashboard-features)
+  - [ESP-NOW RC Bridge](#esp-now-rc-bridge)
+    - [Architecture](#architecture-1)
+    - [Setup](#setup)
+  - [NRF24L01 Radio](#nrf24l01-radio)
+    - [Features](#features-2)
+  - [Bluetooth](#bluetooth)
+  - [OLED (SSD1306)](#oled-ssd1306)
+    - [Commands](#commands-1)
+    - [OLED console mirror](#oled-console-mirror)
+  - [Servo](#servo-1)
+  - [Audio](#audio)
+  - [IMU (MPU6050)](#imu-mpu6050)
+  - [Modules](#modules)
+    - [Text Editor (`edit`)](#text-editor-edit)
+  - [Config system](#config-system)
+    - [Config keys](#config-keys)
+  - [Syslog](#syslog)
+  - [Scheduler](#scheduler)
+  - [Drivers](#drivers)
+  - [Hardware Abstraction Layer (HAL)](#hardware-abstraction-layer-hal)
+  - [Board support](#board-support)
+  - [Partition layout](#partition-layout)
+  - [Project layout](#project-layout)
+  - [Original RP2040 DeckOS](#original-rp2040-deckos)
+  - [Demo](#demo)
 
 ---
 
@@ -191,6 +244,52 @@ hal init -> NVS -> SPIFFS -> board detect -> kernel_init()
   ├── module_fire_event(BOOT_COMPLETE)
   └── shell_init()        (command registration, prompt)
 ```
+
+---
+
+## AutoRun
+
+DeckOS_ESP32 can automatically execute a DeckScript at boot, enabling
+**headless automation** — no serial terminal needed.
+
+### How it works
+
+If the file `/home/autorun.ds` exists in the VFS, it runs automatically on
+every boot after the shell is initialized (before the shell prompt appears).
+The script has full access to all shell commands (`gpio_write`, `echo`,
+`module`, `wifi`, ...) and the full DeckScript language.
+
+On first boot, a default info script is injected into the VFS that types a
+message via USB HID and blinks the onboard LED. You can customize or delete it.
+
+Autorun execution happens in `kernel_run()` on the first poll iteration,
+before the shell handles any user input. This means **no serial terminal is
+required** — plug in the board and the autorun script fires immediately.
+
+
+### Customization
+
+```bash
+# Disable autorun
+rm /home/autorun.ds
+
+# Edit the autorun script
+module load editor
+edit /home/autorun.ds
+
+# Write your own (example: auto-start WiFi and web dashboard)
+write /home/autorun.ds "module load wifi
+sleep 2000
+wifi init
+wifi join MySSID MyPassword
+sleep 5000
+serve start
+gpio_write 33 1"
+```
+
+> Data persists only after running `save` (VFS → SPIFFS). The autorun.ds file
+> is re-injected on first boot if it does not exist, so deleting it is permanent
+> unless you re-flash the firmware.
 
 ---
 
@@ -548,7 +647,8 @@ DeckScript is the built-in scripting language. Scripts are plain text files (`.d
 ### Features
 
 - **Variables** — `let name = value`, reference with `$name`
-- **Arithmetic** — `+`, `-`, `*`, `/`, `%` in `let` expressions
+- **Arithmetic** — `+`, `-`, `*`, `/`, `%` in `let` expressions (chained: `1 + 2 + 3`)
+- **Conditions** — `==`, `!=`, `<`, `>`, `<=`, `>=` with `&&` / `||` chaining
 - **String functions** — `upper()`, `lower()`, `len()`, `substr()`, `contains()`, `trim()`, `replace()`, `format()`
 - **Math functions** — `sqrt()`, `pow()`, `abs()`, `min()`, `max()`, `clamp()`, `map()`, `rand()`, `avg()`
 - **Control flow** — `if`/`elif`/`else`, `switch`/`case`/`default`
@@ -1077,7 +1177,12 @@ DeckOS_ESP32/
 │   │   ├── commands.c            # ~90+ commands
 │   │   └── cmd_imu.c
 │   ├── scripting/                # DeckScript interpreter
-│   │   └── dscript.c
+│   │   ├── dscript_core.c        # Parser, run_lines, script_run_*
+│   │   ├── dscript_vars.c        # Variable management
+│   │   ├── dscript_expr.c        # Condition & arithmetic evaluators
+│   │   ├── dscript_builtin.c     # Built-in functions
+│   │   ├── dscript_flow.c        # Block matching & array helpers
+│   │   └── dscript_internal.h    # Internal API header
 │   ├── communication/            # Networking
 │   │   ├── wifi.c                # Native WiFi
 │   │   ├── swarm.c               # ESP-NOW mesh
